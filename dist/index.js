@@ -6020,7 +6020,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.parseGopVersionFile = exports.installGop = void 0;
+exports.parseGopVersionFile = exports.selectVersion = exports.installGop = void 0;
 const core = __importStar(__nccwpck_require__(2186));
 const semver = __importStar(__nccwpck_require__(1383));
 const fs_1 = __importDefault(__nccwpck_require__(7147));
@@ -6034,18 +6034,41 @@ const GOPLUS_REPO = 'https://github.com/goplus/gop.git';
  */
 async function installGop() {
     try {
-        const versionSpec = resolveVersionInput() || '1.1';
-        const versions = fetchVersions();
-        const version = semver.maxSatisfying(versions, versionSpec);
-        if (!version) {
-            throw new Error(`Unable to find a version that satisfies the version spec '${versionSpec}'`);
+        const versionSpec = resolveVersionInput() || '';
+        const tagVersions = semver.rsort(fetchTags().filter(v => semver.valid(v)));
+        let version = null;
+        if (!versionSpec || versionSpec === 'latest') {
+            version = tagVersions[0];
+            core.warning(`No gop-version specified, using latest version: ${version}`);
         }
-        core.info(`Selected version ${version} by spec ${versionSpec}`);
-        const tagVersion = `v${version}`;
-        const gopDir = clone(tagVersion);
+        else {
+            version = semver.maxSatisfying(tagVersions, versionSpec);
+            if (!version) {
+                core.warning(`No gop-version found that satisfies '${versionSpec}', trying branches...`);
+                const branchVersions = fetchBranches();
+                if (!branchVersions.includes(versionSpec)) {
+                    throw new Error(`No gop-version found that satisfies '${versionSpec}' in branches or tags`);
+                }
+                version = '';
+            }
+        }
+        let checkoutVersion = '';
+        if (version) {
+            core.info(`Selected version ${version} by spec ${versionSpec}`);
+            checkoutVersion = `v${version}`;
+            core.setOutput('gop-version-verified', true);
+        }
+        else {
+            core.warning(`Unable to find a version that satisfies the version spec '${versionSpec}', trying branches...`);
+            checkoutVersion = versionSpec;
+            core.setOutput('gop-version-verified', false);
+        }
+        const gopDir = cloneBranchOrTag(checkoutVersion);
         install(gopDir);
-        test(tagVersion);
-        core.setOutput('gop-version', version);
+        if (version) {
+            checkVersion(version);
+        }
+        core.setOutput('gop-version', gopVersion());
     }
     catch (error) {
         // Fail the workflow run if an error occurs
@@ -6054,7 +6077,15 @@ async function installGop() {
     }
 }
 exports.installGop = installGop;
-function clone(versionSpec) {
+function selectVersion(versions, versionSpec) {
+    const sortedVersions = semver.rsort(versions.filter(v => semver.valid(v)));
+    if (!versionSpec || versionSpec === 'latest') {
+        return sortedVersions[0];
+    }
+    return semver.maxSatisfying(sortedVersions, versionSpec);
+}
+exports.selectVersion = selectVersion;
+function cloneBranchOrTag(versionSpec) {
     // git clone https://github.com/goplus/gop.git with tag $versionSpec to $HOME/workdir/gop
     const workDir = path_1.default.join(os_1.default.homedir(), 'workdir');
     if (fs_1.default.existsSync(workDir)) {
@@ -6081,17 +6112,21 @@ function install(gopDir) {
     core.addPath(bin);
     core.info('gop installed');
 }
-function test(versionSpec) {
+function checkVersion(versionSpec) {
     core.info(`Testing gop ${versionSpec} ...`);
-    const out = (0, child_process_1.execSync)('gop env GOPVERSION', { env: process.env });
-    const actualVersion = out.toString().trim();
+    const actualVersion = gopVersion();
     if (actualVersion !== versionSpec) {
         throw new Error(`Installed gop version ${actualVersion} does not match expected version ${versionSpec}`);
     }
     core.info(`Installed gop version ${actualVersion}`);
+    return actualVersion;
 }
-function fetchVersions() {
-    const cmd = `git -c 'versionsort.suffix=-' ls-remote --tags --sort='v:refname' ${GOPLUS_REPO}`;
+function gopVersion() {
+    const out = (0, child_process_1.execSync)('gop env GOPVERSION', { env: process.env });
+    return out.toString().trim().replace(/^v/, '');
+}
+function fetchTags() {
+    const cmd = `git -c versionsort.suffix=- ls-remote --tags --sort=v:refname ${GOPLUS_REPO}`;
     const out = (0, child_process_1.execSync)(cmd).toString();
     const versions = out
         .split('\n')
@@ -6100,9 +6135,18 @@ function fetchVersions() {
         .map(s => s.replace(/^v/, ''));
     return versions;
 }
+function fetchBranches() {
+    const cmd = `git -c versionsort.suffix=- ls-remote --heads --sort=v:refname ${GOPLUS_REPO}`;
+    const out = (0, child_process_1.execSync)(cmd).toString();
+    const versions = out
+        .split('\n')
+        .filter(s => s)
+        .map(s => s.split('\t')[1].replace('refs/heads/', ''));
+    return versions;
+}
 function resolveVersionInput() {
-    let version = core.getInput('gop-version');
-    const versionFilePath = core.getInput('gop-version-file');
+    let version = process.env['INPUT_GOP_VERSION'];
+    const versionFilePath = process.env['INPUT_GOP_VERSION_FILE'];
     if (version && versionFilePath) {
         core.warning('Both gop-version and gop-version-file inputs are specified, only gop-version will be used');
     }

@@ -43,6 +43,10 @@ outputs:
   gop-version:
     description:
       'The installed Go+ version. Useful when given a version range as input.'
+  gop-version-verified:
+    description:
+      Whether the installed Go+ version checked, true if the installed version
+      is in the tags, false otherwise.
   go-version:
     description:
       'The installed Go version. Useful when given a version range as input.'
@@ -51,7 +55,19 @@ outputs:
 runs:
   using: 'composite'
   steps:
-    - uses: 'actions/setup-go@v4'
+    - uses: 'actions/setup-go@v5'
+      with:
+        go-version: ${{ inputs.go-version }}
+        go-version-file: ${{ inputs.go-version-file }}
+        check-latest: ${{ inputs.check-latest }}
+        token: ${{ inputs.token }}
+        cache: ${{ inputs.cache }}
+        cache-dependency-path: ${{ inputs.cache-dependency-path }}
+        architecture: ${{ inputs.architecture }}
+
     - name: 'Setup Go+'
-      run: node ${{ github.action_path }}/dist/index.js
+      run: node $GITHUB_ACTION_PATH/dist/index.js
       shell: bash
+      env:
+        INPUT_GOP_VERSION: ${{ inputs.gop-version }}
+        INPUT_GOP_VERSION_FILE: ${{ inputs.gop-version-file }}
